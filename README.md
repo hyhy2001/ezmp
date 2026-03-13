@@ -245,25 +245,49 @@ def count_true_clocks(row_dict):
 
 # 2. File processor (The parent target function)
 def process_massive_file(file_path):
-    # This automatically detects it is inside a Worker Process!
-    # Instead of spawning more processes, it safely iterates the file via a Generator.
-    chunks_gen = ezmp.excel.map_excel_chunks(
-        count_true_clocks, 
-        file_path, 
-        chunksize=1000 # Memory stays tiny (e.g 1000 rows limit)
-    )
-    
-    # Aggregate chunk results
-    total = sum(chunk_df['ezmp_result'].sum() for chunk_df in chunks_gen)
-    return total
+### 6. 🗄️ The Multi-Mega File Scraping Engine
+Wait, you have 50 Excel files scattered across 12 nested folders and you want to extract `df` chunks from all of them at once?
+`files.map_dir()` handles the OS traversal, and assigns chunks of specific files to different CPU cores automatically.
+```python
+import ezmp
 
-# 3. Process the entire directory of massive files concurrently!
-results = ezmp.files.map_dir(
-    target_func=process_massive_file,
-    dir_path="/path/to/massive/matrices/",
-    pattern="*.xlsx",
-    max_workers=8 # Spawns 8 Concurrent Processes parsing 8 files stream-wise
+def extract_revenue(df):
+    # Process the dataframe chunk
+    return df['Revenue'].sum()
+
+results = ezmp.excel.map_excel_files(
+    target_func=extract_revenue,
+    directory="./financial_reports_2024",
+    recursive=True,            # Deep dive into nested folders
+    use_threads=False,         # Use Processes for CPU-heavy pandas aggregations
+    max_workers=8              # 8 cores tearing through 50 files
 )
+total_revenue = sum(results)
+print(f"Total Combined Revenue: {total_revenue}")
+```
+
+### 7. 🚀 Native Multi-Core Excel Formula Evaluation
+When system-generated Excel files contain raw formulas (e.g., `=VLOOKUP(A2, Sheet2!A:Z, 2)`) that haven't been opened and pre-calculated by Microsoft Excel, standard Python libraries return unreadable strings or `None`.
+`ezmp` solves this by boasting a **Native Multi-Process AST Formula Engine**.
+Just pass `evaluate_formulas=True`, and `ezmp` will build an Abstract Syntax Tree, compute the math, logic, text, or lookups perfectly, and **globally cache** massive lookup tables across your 24 CPU cores so performance never drops!
+```python
+import ezmp
+
+def process_evaluated_row(df):
+    # 'Price' now contains the perfectly evaluated VLOOKUP float, not the raw "=VLOOKUP(...)" string!
+    return df[df['Price'] > 100]
+
+computed_chunks = ezmp.excel.map_excel_chunks(
+    target_func=process_evaluated_row,
+    file_path="massive_uncached_invoice.xlsx",
+    chunksize=5000,
+    use_processes=True,  
+    max_workers=10,
+    evaluate_formulas=True   # 🚀 The magic flag! Parses and Computes ASTs natively!
+)
+
+for clean_df in computed_chunks:
+    print(clean_df.head())
 ```
 
 ---

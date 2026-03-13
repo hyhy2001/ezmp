@@ -2,6 +2,77 @@ from typing import Callable, Optional, Any, List, Iterator
 from .dataframe import map_df, _check_pandas, DataFrame, pd  # type: ignore
 
 
+def _create_ref_getter(filepath: str, cache: Any):
+    """
+    Creates a callable that fetches references natively for a specific subprocess.
+    """
+    import openpyxl  # type: ignore
+
+    def ref_getter(ref_str: str):
+        hit = cache.get(ref_str) if cache else None
+        if hit is not None:
+            return hit
+
+        wb = openpyxl.load_workbook(filepath, read_only=True, data_only=False)
+        sheet_name = wb.active.title
+        cell_ref = ref_str
+        if "!" in ref_str:
+            sheet_name, cell_ref = ref_str.split("!")
+
+        try:
+            sheet = wb[sheet_name]
+            if ":" in cell_ref:
+                cells = sheet[cell_ref]
+                if (
+                    isinstance(cells, tuple)
+                    and len(cells) > 0
+                    and isinstance(cells[0], tuple)
+                ):
+                    val = [[c.value for c in r] for r in cells]
+                elif isinstance(cells, tuple):
+                    val = [c.value for c in cells]
+                else:
+                    val = cells.value
+            else:
+                val = sheet[cell_ref].value
+        except Exception:
+            val = None
+        finally:
+            wb.close()
+
+        if cache:
+            cache.set(ref_str, val)
+        return val
+
+    return ref_getter
+
+
+def _make_eval_wrapper(user_func: Callable, filepath: str, cache: Any):
+    """
+    Wraps the user's DataFrame `.apply` target function, dynamically evaluating formulas
+    on the row PRIOR to passing the row to the user function.
+    """
+
+    def wrapper(row):
+        from ezmp.formula import evaluate_formula_string
+        from ezmp.formula.errors import ExcelError
+
+        # Instantiate ref_getter inside the subprocess
+        ref_getter = _create_ref_getter(filepath, cache)
+
+        for col in row.index:
+            val = row[col]
+            if isinstance(val, str) and str(val).startswith("="):
+                res = evaluate_formula_string(str(val), ref_getter)
+                if isinstance(res, ExcelError):
+                    res = res.code
+                row[col] = res
+
+        return user_func(row)
+
+    return wrapper
+
+
 def map_excel(
     target_func: Callable,
     file_path: str,
@@ -42,10 +113,13 @@ def map_excel_chunks(
     use_threads: bool = False,
     max_workers: Optional[int] = None,
     desc: str = "Processing Excel chunks",
+    evaluate_formulas: bool = False,
 ) -> Iterator[DataFrame]:
     """
     Reads an Excel file lazily in chunks, to prevent Out-Of-Memory (OOM) crashes
     on massive data matrices (e.g., millions of cells).
+    If evaluate_formulas is True, ezmp dynamically parses Excel formulas (like VLOOKUP)
+    via a native AST engine over parallel processes.
 
     Returns a Generator yielding processed DataFrame chunks.
     Dependencies: openpyxl
@@ -53,9 +127,24 @@ def map_excel_chunks(
     _check_pandas()
     import openpyxl  # type: ignore
 
+    global_cache = None
+    if evaluate_formulas:
+        data_only = False
+        from ezmp.cache import GlobalCache
+
+        global_cache = GlobalCache(enabled=True)
+    else:
+        data_only = True
+
+    actual_target = (
+        _make_eval_wrapper(target_func, file_path, global_cache)
+        if evaluate_formulas
+        else target_func
+    )
+
     def chunk_generator():
         # Use read_only=True for streaming, drastically reducing memory
-        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(file_path, read_only=True, data_only=data_only)
         ws = wb.active
 
         # Get headers
@@ -73,7 +162,7 @@ def map_excel_chunks(
 
                 # Apply the function concurrently to the rows in this chunk
                 processed_df = map_df(
-                    target_func=target_func,
+                    target_func=actual_target,
                     df=df_chunk,
                     use_threads=use_threads,
                     max_workers=max_workers,
@@ -88,7 +177,7 @@ def map_excel_chunks(
         if chunk_data:
             df_chunk = pd.DataFrame(chunk_data, columns=headers)
             yield map_df(
-                target_func=target_func,
+                target_func=actual_target,
                 df=df_chunk,
                 use_threads=use_threads,
                 max_workers=max_workers,
