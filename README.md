@@ -138,6 +138,41 @@ folders = [[1, 2], [3, 4], [5, 6]]
 ezmp.run(process_folder, folders)
 ```
 
+### 6. Parallel Processing Multiple Massive Excel Files (Pro Pattern)
+If you have **100s of massive Excel matrices** (e.g., 100 Million cells each), attempting to load them all into RAM concurrently using `pd.read_excel` will destroy your system (OOM). 
+
+Instead, harness the power of `ezmp`'s Auto-Fallback feature by nesting a chunked reader inside a parallel directory scanner:
+
+```python
+import ezmp
+
+# 1. Row processor (Runs Sequentially on each chunk row inside the file worker)
+def count_true_clocks(row_dict):
+    return sum(1 for val in row_dict.values() if val is True)
+
+# 2. File processor (The parent target function)
+def process_massive_file(file_path):
+    # This automatically detects it is inside a Worker Process!
+    # Instead of spawning more processes, it safely iterates the file via a Generator.
+    chunks_gen = ezmp.excel.map_excel_chunks(
+        count_true_clocks, 
+        file_path, 
+        chunksize=1000 # Memory stays tiny (e.g 1000 rows limit)
+    )
+    
+    # Aggregate chunk results
+    total = sum(chunk_df['ezmp_result'].sum() for chunk_df in chunks_gen)
+    return total
+
+# 3. Process the entire directory of massive files concurrently!
+results = ezmp.files.map_dir(
+    target_func=process_massive_file,
+    dir_path="/path/to/massive/matrices/",
+    pattern="*.xlsx",
+    max_workers=8 # Spawns 8 Concurrent Processes parsing 8 files stream-wise
+)
+```
+
 ---
 
 ## 🛠️ API Reference
