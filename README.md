@@ -34,6 +34,95 @@ pip install "ezmp[all]"   # Installs everything
 
 ---
 
+## 📖 Code Examples: Basic Workflows
+
+These fundamental examples cover the core daily use-cases for `ezmp`.
+
+### 1. ⚡ Basic CPU Multiprocessing (`run`)
+The simplest way to use `ezmp`. By default, it uses Python processes to max out your CPU cores, replacing standard `map()` loops.
+
+```python
+import ezmp
+import time
+
+def heavy_computation(x):
+    time.sleep(1) # simulate work
+    return x * x
+
+items = [1, 2, 3, 4, 5, 6, 7, 8]
+# Returns quickly across all cores!
+results = ezmp.run(heavy_computation, items)
+print(results) 
+```
+
+### 2. 🔀 Guaranteeing Result Order (`run_ordered`)
+Standard parallel execution returns results in the order they complete to maximize speed. If your downstream logic requires the output list to perfectly match the input list's order, use `run_ordered`.
+
+```python
+import ezmp
+
+items = [10, 1, 5, 3]
+
+# The output list strictly maintains the [10, 1, 5, 3] order mapping
+results = ezmp.core.run_ordered(lambda x: x*2, items)
+```
+
+### 3. 📂 Processing Entire Directories (`map_dir`)
+Need to process hundreds of image files or JSONs? Use `map_dir` with Threads to breeze through disk I/O without manual `os.listdir` loops.
+
+```python
+import ezmp
+import os
+
+def process_image(filepath):
+    # e.g., Read file, resize, save
+    size = os.path.getsize(filepath)
+    return f"{filepath}: {size} bytes"
+
+# Uses ThreadPool natively since Disk IO is the bottleneck
+results = ezmp.files.map_dir(
+    process_image,
+    dir_path="images/",
+    pattern="*.png",
+    use_threads=True
+)
+```
+
+### 4. 💽 Streaming Results Directly to Disk (`write_stream`)
+If your parallel workers are generating massive amounts of data, keeping the `results` list in RAM will crash your machine. Pipe a Generator directly into `write_stream` to save it line-by-line.
+
+```python
+import ezmp
+
+# Returns a lazy Generator instead of a List
+generator = ezmp.core.run_stream(lambda x: x*2, range(1000000))
+
+# Consumes the generator and writes to disk safely with near-zero RAM
+ezmp.files.write_stream(
+    results_generator=generator, 
+    output_path="results.txt",
+    transform=lambda item: f"Result: {item}" 
+)
+```
+
+### 5. 🛡️ Safe Nested Execution (Auto-Fallback)
+Running multiprocessing pools inside other multiprocessing pools causes severe bugs (like `daemonic processes are not allowed to have children`). `ezmp` detects these nested calls automatically and gracefully downshifts the inner function to a sequential loop, shielding you from crashes.
+
+```python
+import ezmp
+
+def process_file(file_path):
+    # ezmp automatically detects it's inside a Worker and runs sequentially!
+    lines = open(file_path).readlines()
+    return ezmp.run(lambda x: x.upper(), lines) # No crashes here
+
+folders = ["dir1/", "dir2/"]
+# The outer pool runs fine across all cores
+ezmp.run(process_file, folders)
+```
+
+---
+
 ## 💡 Code Examples: The "Mega" Pro Patterns
 
 These 6 high-value use cases demonstrate how `ezmp` transforms complex Data Engineering into simple one-liners.
