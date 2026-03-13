@@ -229,3 +229,63 @@ def test_core_run_stream():
     # Order is not guaranteed, but standard mapping should be
     assert set(res) == {1, 4, 9, 16, 25}
 
+def sum_true_in_row(row_dict):
+    # row_dict is a dictionary representing the Excel row
+    return sum(1 for v in row_dict.values() if v is True)
+
+@pytest.mark.stress
+def test_massive_excel_matrix(tmp_path):
+    """
+    Stress test verifying ezmp.excel.map_excel_chunks against an EDA Clock matrix.
+    Dimensions: 100,000 rows x 100 columns (10,000,000 cells).
+    This test is ignored by default to save CI/CD time, use `pytest -m stress` to run it.
+    """
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("openpyxl")
+    np = pytest.importorskip("numpy")
+    
+    import time
+    from ezmp.utils import logger # type: ignore
+    
+    print("\n[Stress] Generating 1000 x 1000 boolean matrix in memory...")
+    start_gen = time.time()
+    
+    # Generate 1 million True/False cells rapidly using NumPy
+    bool_matrix = np.random.choice([True, False], size=(1000, 1000))
+    
+    # Convert to DataFrame with arbitrary String columns
+    df = pd.DataFrame(bool_matrix, columns=[f"C{i}" for i in range(1000)])
+    
+    # Calculate the exact True count beforehand to verify against ezmp
+    expected_true_count = bool_matrix.sum()
+    print(f"[Stress] Matrix generated in {time.time() - start_gen:.2f}s. Total True cells: {expected_true_count}")
+    
+    # Write to Excel (This operation alone will take quite some time and RAM)
+    excel_file = tmp_path / "mega_clock_matrix.xlsx"
+    print("[Stress] Writing 10M cells to massive Excel file (approx 100MB+ disk...)")
+    start_write = time.time()
+    df.to_excel(str(excel_file), index=False)
+    print(f"[Stress] File written in {time.time() - start_write:.2f}s.")
+    
+    # Delete the massive DataFrame from memory to simulate a clean processing environment
+    del df
+    del bool_matrix
+    import gc
+    gc.collect()
+    
+    print("[Stress] Testing ezmp.excel.map_excel_chunks with chunksize=1000...")
+    start_ezmp = time.time()
+    
+    # Process in chunks of 500 rows (each chunk is 500 x 1000 cells)
+    chunks_gen = ezmp.excel.map_excel_chunks(sum_true_in_row, str(excel_file), chunksize=500)
+    
+    # Sum the results from the generator
+    actual_true_count = 0
+    for chunk_res_df in chunks_gen:
+        # chunk_res_df has a column 'ezmp_result' added by map_df
+        actual_true_count += int(chunk_res_df['ezmp_result'].sum())
+        
+    print(f"[Stress] ezmp finished processing in {time.time() - start_ezmp:.2f}s.")
+    
+    assert actual_true_count == expected_true_count
+
