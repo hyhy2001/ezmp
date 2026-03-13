@@ -114,31 +114,116 @@ generator = ezmp.data.map_excel_chunks(count_active_clocks, "huge_soc_matrix.xls
 
 for processed_chunk_df in generator:
     print(processed_chunk_df['ezmp_result'])
-```
 
-### 5. Nested Execution (Auto-Fallback)
-Running multiprocessing pools inside other multiprocessing pools causes severe bugs (like `daemonic processes are not allowed to have children` or thread pool deadlocks). `ezmp` detects these nested calls automatically and gracefully downshifts the inner function to sequential execution, shielding you from crashes.
+## 💡 Code Examples: The "Mega" Pro Patterns
+
+These 6 high-value use cases demonstrate how `ezmp` transforms complex Data Engineering into simple one-liners.
+
+### 1. 🐼 Fast-Track Pandas DataFrames (CPU Bound)
+`df.apply()` is notoriously single-core and slow. Use `map_df` to obliterate calculation times across millions of rows by utilizing 100% of your CPU cores.
 
 ```python
 import ezmp
-import time
+import pandas as pd
 
-def process_file(x):
-    time.sleep(0.1)
-    return x * 10
+def heavy_financial_calc(row_dict):
+    # E.g., Risk scoring algorithm, regex matches, string ops
+    return row_dict['Price'] * row_dict['Volume'] / 1.5
 
-def process_folder(folder_contents):
-    # This nested call is perfectly safe. 
-    # ezmp automatically falls back to sequential execution.
-    return ezmp.run(process_file, folder_contents)
+df = pd.DataFrame({"Price": [10, 20, 30], "Volume": [100, 200, 300]})
 
-folders = [[1, 2], [3, 4], [5, 6]]
-
-# Only the outer layer spins up a multiprocessing pool
-ezmp.run(process_folder, folders)
+# Spins up all CPU cores to crunch the DataFrame concurrently!
+# The returned DataFrame has a brand new column: 'ezmp_result'
+result_df = ezmp.dataframe.map_df(heavy_financial_calc, df)
+print(result_df)
 ```
 
-### 6. Parallel Processing Multiple Massive Excel Files (Pro Pattern)
+### 2. 🌐 High-Speed API Scraping (IO-Bound)
+Stop waiting for Network requests. Use Threads (`use_threads=True`) to make 1000s of API or database calls simultaneously without burning CPU.
+
+```python
+import ezmp
+import requests
+
+def scrape_title(url):
+    response = requests.get(url, timeout=5)
+    return response.text.split("<title>")[1].split("</title>")[0]
+
+urls = ["https://example.com", "https://python.org", "https://github.com"]
+
+# Spawns a massive ThreadPool. Ideal for Network/Disk IO.
+titles = ezmp.net.map_urls(scrape_title, urls, max_workers=50)
+print(titles)
+```
+
+### 3. 📜 Saving Servers from 100GB Kaggle CSVs (Chunking)
+Normal `pd.read_csv()` will crash your machine (OOM) on a 100GB file. `map_csv` chunks the file lazily, capping RAM at ~50MB.
+
+```python
+import ezmp
+
+def analyze_row(row_dict):
+    if row_dict['Status'] == 'ERROR':
+        return 1
+    return 0
+
+# Lazily reads via chunks. It yields a generator!
+# Your RAM usage will sit perfectly at 0%.
+results_gen = ezmp.csv.map_csv(
+    analyze_row, 
+    "massive_data_100GB.csv", 
+    chunksize=10000 
+)
+
+total_errors = sum(results_gen)
+print(f"Millions of rows analyzed. Total Errors: {total_errors}")
+```
+
+### 4. 🪵 Multi-Line Server Error Log Parsing
+Extracting stack traces from 50GB Apache/Docker text logs is brutal. Use `logs.parse_blocks` to segment custom blocks and process them concurrently.
+
+```python
+import ezmp
+
+# 1. Define how to detect a chunk boundary in your custom log
+def stack_trace_extractor(chunk_lines):
+    # E.g., Group lines that start with [ERROR] and following traces
+    return [block for block in chunk_lines if "[ERROR]" in block]
+
+# 2. Process the extracted blocks
+def analyze_stack_trace(error_block):
+    return "Database Timeout" if "Connection refused" in error_block else "Unknown"
+
+# Tears through gigantic text files block-by-block using Regex/Extractors
+results = ezmp.logs.parse_blocks(
+    analyze_stack_trace,
+    "production_server.log",
+    block_extractor=stack_trace_extractor
+)
+```
+
+### 5. 🛠 Multi-Arguments (`run_multi`)
+Want to map an image-resizing function that requires varying width and height per file? Pack your parameters into tuples.
+
+```python
+import ezmp
+
+def crop_video(file_path, start_time, end_time):
+    # Pretend we are calling FFMPEG here
+    return f"Cropped {file_path} from {start_time}s to {end_time}s."
+
+tasks = [
+    ("vid1.mp4", 10, 50),
+    ("vid2.mp4", 0, 15),
+    ("vid3.mp4", 120, 200)
+]
+
+# `run_multi` automatically unpacks each tuple and feeds it to `crop_video`
+results = ezmp.core.run_multi(crop_video, tasks)
+print(results)
+```
+
+### 6. 🗄️ Parallel Processing Multiple Massive Excel Files
 If you have **100s of massive Excel matrices** (e.g., 100 Million cells each), attempting to load them all into RAM concurrently using `pd.read_excel` will destroy your system (OOM). 
 
 Instead, harness the power of `ezmp`'s Auto-Fallback feature by nesting a chunked reader inside a parallel directory scanner:
