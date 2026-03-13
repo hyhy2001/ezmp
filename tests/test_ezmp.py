@@ -1,68 +1,82 @@
-import ezmp # type: ignore
-import pytest # type: ignore
+import ezmp  # type: ignore
+import pytest  # type: ignore
+import typing
+
 
 def square(x):
     return x * x
 
+
 def double(x):
     return x * 2
 
+
 def check_even(num):
     return num % 2 == 0
+
 
 def test_core_unordered():
     items = [1, 2, 3]
     res = ezmp.run(square, items)
     assert set(res) == {1, 4, 9}
 
+
 def test_core_ordered():
     items = [1, 2, 3]
     res = ezmp.run_ordered(double, items)
     assert res == [2, 4, 6]
 
+
 def add(x, y):
     return x + y
+
 
 def test_core_multi_unordered():
     items = [(1, 2), (3, 4), (5, 6)]
     res = ezmp.run_multi(add, items)
     assert set(res) == {3, 7, 11}
 
+
 def test_core_multi_ordered():
     items = [(1, 2), (3, 4), (5, 6)]
     res = ezmp.run_multi_ordered(add, items)
     assert res == [3, 7, 11]
 
+
 def test_net_ordered():
     res = ezmp.net.map_urls(check_even, [1, 2, 3, 4, 5])
     assert res == [False, True, False, True, False]
+
 
 def test_logs_chunk_reading(tmp_path):
     # Create a dummy log file
     log_file = tmp_path / "huge_log.txt"
     log_file.write_text("line1\nline2\nline3\nline4\nline5\n")
-    
+
     chunks = list(ezmp.logs.read_chunks(str(log_file), chunk_size=2))
     assert len(chunks) == 3
     assert chunks[0] == ["line1\n", "line2\n"]
     assert chunks[1] == ["line3\n", "line4\n"]
     assert chunks[2] == ["line5\n"]
+    assert chunks[2] == ["line5\n"]
 
-import typing
 
-def dummy_log_extractor(chunk: typing.List[str], state: typing.Dict[str, typing.Any]) -> typing.Generator[typing.Dict[str, typing.Any], None, None]:
+def dummy_log_extractor(
+    chunk: typing.List[str], state: typing.Dict[str, typing.Any]
+) -> typing.Generator[typing.Dict[str, typing.Any], None, None]:
     if not state:
-        state.update({'in_path': False, 'current_start': None})
-        
+        state.update({"in_path": False, "current_start": None})
+
     for line in chunk:
         if line.startswith("Startpoint:"):
-            state['in_path'] = True
-            state['current_start'] = line.split()[1]
-        elif line.startswith("slack (VIOLATED)") and state['in_path']:
+            state["in_path"] = True
+            state["current_start"] = line.split()[1]
+        elif line.startswith("slack (VIOLATED)") and state["in_path"]:
             val = float(line.split()[-1])
-            yield {'start': state['current_start'], 'slack': val}
-            state['in_path'] = False
-            state['current_start'] = None
+            yield {"start": state["current_start"], "slack": val}
+            state["in_path"] = False
+            state["current_start"] = None
+
 
 def test_logs_parse_blocks(tmp_path):
     log_file = tmp_path / "server_log.txt"
@@ -78,160 +92,177 @@ Startpoint: reg_C
 split across chunk
 """
     log_file.write_text(log_data.strip() + "\nslack (VIOLATED) -0.1\n")
-    
+
     # Intentionally use a tiny chunk size of 3 lines to force state carrying across chunks
-    results = list(ezmp.logs.parse_blocks(str(log_file), dummy_log_extractor, chunk_size=3, initial_state={}))
-    
+    results = list(
+        ezmp.logs.parse_blocks(
+            str(log_file), dummy_log_extractor, chunk_size=3, initial_state={}
+        )
+    )
+
     assert len(results) == 3
-    assert results[0] == {'start': 'reg_A', 'slack': -0.5}
-    assert results[1] == {'start': 'reg_B', 'slack': -1.2}
-    assert results[2] == {'start': 'reg_C', 'slack': -0.1}
+    assert results[0] == {"start": "reg_A", "slack": -0.5}
+    assert results[1] == {"start": "reg_B", "slack": -1.2}
+    assert results[2] == {"start": "reg_C", "slack": -0.1}
 
 
 def sum_col_a(df):
-    return df['A'].sum()
+    return df["A"].sum()
+
 
 def test_data_map_excel_files(tmp_path):
     pd = pytest.importorskip("pandas")
-    
+
     # Create two dummy excel files
-    df1 = pd.DataFrame({'A': [1, 2], 'B': [3, 4]})
-    df2 = pd.DataFrame({'A': [10, 20], 'B': [30, 40]})
-    
+    df1 = pd.DataFrame({"A": [1, 2], "B": [3, 4]})
+    df2 = pd.DataFrame({"A": [10, 20], "B": [30, 40]})
+
     file1 = tmp_path / "data1.xlsx"
     file2 = tmp_path / "data2.xlsx"
     df1.to_excel(str(file1), index=False)
     df2.to_excel(str(file2), index=False)
-        
+
     res = ezmp.excel.map_excel_files(sum_col_a, str(tmp_path))
-    
+
     # Ordered is not guaranteed, but we can check the set
     assert set(res) == {3, 30}
 
+
 def process_chunk(row):
-    return row['val'] + 0
+    return row["val"] + 0
+
 
 def test_data_map_csv_chunks(tmp_path):
     pd = pytest.importorskip("pandas")
-    
+
     # Create a large dummy CSV
-    df = pd.DataFrame({'val': range(10)})
+    df = pd.DataFrame({"val": range(10)})
     csv_file = tmp_path / "large.csv"
     df.to_csv(str(csv_file), index=False)
-    
+
     # Read in chunks of 5
     chunks_gen = ezmp.csv.map_csv(process_chunk, str(csv_file), chunksize=5)
-    
+
     # We should get a generator, not a dataframe directly
     import types
+
     assert isinstance(chunks_gen, types.GeneratorType)
-    
+
     # Evaluate it
     res = list(chunks_gen)
     assert len(res) == 2
-    
+
     # Chunk 1 (0,1,2,3,4) sums to 10
     # Chunk 2 (5,6,7,8,9) sums to 35
-    assert sum(res[0]['ezmp_result'].values) == 10
-    assert sum(res[1]['ezmp_result'].values) == 35
+    assert sum(res[0]["ezmp_result"].values) == 10
+    assert sum(res[1]["ezmp_result"].values) == 35
 
 
 def count_true(row_dict):
     # row_dict will look like {'A': True, 'B': False}
     return sum(1 for val in row_dict.values() if val is True)
 
+
 def test_data_map_excel_chunks(tmp_path):
     pd = pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
-    
+
     # Create a dummy Excel matrix
-    df = pd.DataFrame({
-        'A': [True, False, True, False, True],
-        'B': [True, True, False, False, True]
-    })
-    
+    df = pd.DataFrame(
+        {"A": [True, False, True, False, True], "B": [True, True, False, False, True]}
+    )
+
     excel_file = tmp_path / "matrix_chunk.xlsx"
     df.to_excel(str(excel_file), index=False)
-    
+
     import types
+
     # Read in chunks of 2 rows
     chunks_gen = ezmp.excel.map_excel_chunks(count_true, str(excel_file), chunksize=2)
     assert isinstance(chunks_gen, types.GeneratorType)
-    
+
     res = list(chunks_gen)
-    
+
     # 5 rows total / 2 = 3 chunks
     assert len(res) == 3
-    
+
     # Chunk 1:
     # Row 0: True + True = 2
     # Row 1: False + True = 1
-    assert list(res[0]['ezmp_result'].values) == [2, 1]
-    
+    assert list(res[0]["ezmp_result"].values) == [2, 1]
+
     # Chunk 2:
     # Row 2: True + False = 1
     # Row 3: False + False = 0
-    assert list(res[1]['ezmp_result'].values) == [1, 0]
-    
+    assert list(res[1]["ezmp_result"].values) == [1, 0]
+
     # Chunk 3:
     # Row 4: True + True = 2
-    assert list(res[2]['ezmp_result'].values) == [2]
+    assert list(res[2]["ezmp_result"].values) == [2]
+
 
 def test_files_write_stream(tmp_path):
     output_file = tmp_path / "stream_output.csv"
-    
+
     # A generator simulating a massive data stream
     def huge_stream():
         for i in range(5):
             yield {"id": i, "val": i * 10}
-            
+
     # Custom transformer
     def to_csv_line(item):
         return f"{item['id']},{item['val']}"
-        
+
     ezmp.files.write_stream(
         results_generator=huge_stream(),
         output_path=str(output_file),
-        transform=to_csv_line
+        transform=to_csv_line,
     )
-    
-    lines = output_file.read_text().strip().split('\n')
+
+    lines = output_file.read_text().strip().split("\n")
     assert len(lines) == 5
     assert lines[0] == "0,0"
     assert lines[-1] == "4,40"
 
+
 def _inner_work(x):
     return x * 10
+
 
 def _outer_work(row_list):
     # This will trigger the Auto Fallback
     return ezmp.run(_inner_work, row_list, use_threads=False)
 
+
 def test_nested_execution():
     matrix = [[1, 2], [3, 4], [5, 6]]
     # Launch via process pool
     res = ezmp.run_ordered(_outer_work, matrix, use_threads=False)
-    
+
     assert res == [[10, 20], [30, 40], [50, 60]]
+
 
 def test_core_run_stream():
     items = [1, 2, 3, 4, 5]
-    
+
     # Run the stream generator
     stream_gen = ezmp.run_stream(square, items)
-    
+
     import types
+
     assert isinstance(stream_gen, types.GeneratorType)
-    
+
     # Collect items from the generator
     res = list(stream_gen)
-    
+
     # Order is not guaranteed, but standard mapping should be
     assert set(res) == {1, 4, 9, 16, 25}
+
 
 def sum_true_in_row(row_dict):
     # row_dict is a dictionary representing the Excel row
     return sum(1 for v in row_dict.values() if v is True)
+
 
 @pytest.mark.stress
 def test_massive_excel_matrix(tmp_path):
@@ -243,49 +274,52 @@ def test_massive_excel_matrix(tmp_path):
     pd = pytest.importorskip("pandas")
     pytest.importorskip("openpyxl")
     np = pytest.importorskip("numpy")
-    
+
     import time
-    from ezmp.utils import logger # type: ignore
-    
+
     print("\n[Stress] Generating 1000 x 1000 boolean matrix in memory...")
     start_gen = time.time()
-    
+
     # Generate 1 million True/False cells rapidly using NumPy
     bool_matrix = np.random.choice([True, False], size=(1000, 1000))
-    
+
     # Convert to DataFrame with arbitrary String columns
     df = pd.DataFrame(bool_matrix, columns=[f"C{i}" for i in range(1000)])
-    
+
     # Calculate the exact True count beforehand to verify against ezmp
     expected_true_count = bool_matrix.sum()
-    print(f"[Stress] Matrix generated in {time.time() - start_gen:.2f}s. Total True cells: {expected_true_count}")
-    
+    print(
+        f"[Stress] Matrix generated in {time.time() - start_gen:.2f}s. Total True cells: {expected_true_count}"
+    )
+
     # Write to Excel (This operation alone will take quite some time and RAM)
     excel_file = tmp_path / "mega_clock_matrix.xlsx"
     print("[Stress] Writing 10M cells to massive Excel file (approx 100MB+ disk...)")
     start_write = time.time()
     df.to_excel(str(excel_file), index=False)
     print(f"[Stress] File written in {time.time() - start_write:.2f}s.")
-    
+
     # Delete the massive DataFrame from memory to simulate a clean processing environment
     del df
     del bool_matrix
     import gc
+
     gc.collect()
-    
+
     print("[Stress] Testing ezmp.excel.map_excel_chunks with chunksize=1000...")
     start_ezmp = time.time()
-    
+
     # Process in chunks of 500 rows (each chunk is 500 x 1000 cells)
-    chunks_gen = ezmp.excel.map_excel_chunks(sum_true_in_row, str(excel_file), chunksize=500)
-    
+    chunks_gen = ezmp.excel.map_excel_chunks(
+        sum_true_in_row, str(excel_file), chunksize=500
+    )
+
     # Sum the results from the generator
     actual_true_count = 0
     for chunk_res_df in chunks_gen:
         # chunk_res_df has a column 'ezmp_result' added by map_df
-        actual_true_count += int(chunk_res_df['ezmp_result'].sum())
-        
-    print(f"[Stress] ezmp finished processing in {time.time() - start_ezmp:.2f}s.")
-    
-    assert actual_true_count == expected_true_count
+        actual_true_count += int(chunk_res_df["ezmp_result"].sum())
 
+    print(f"[Stress] ezmp finished processing in {time.time() - start_ezmp:.2f}s.")
+
+    assert actual_true_count == expected_true_count
