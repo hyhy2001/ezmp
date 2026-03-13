@@ -200,3 +200,17 @@ def test_files_write_stream(tmp_path):
     assert lines[0] == "0,0"
     assert lines[-1] == "4,40"
 
+def _inner_work(x):
+    return x * 10
+
+def _outer_work(row_list):
+    # This will trigger the Auto Fallback
+    return ezmp.run(_inner_work, row_list, use_threads=False)
+
+def test_nested_execution():
+    matrix = [[1, 2], [3, 4], [5, 6]]
+    # Launch via process pool
+    res = ezmp.run_ordered(_outer_work, matrix, use_threads=False)
+    
+    assert res == [[10, 20], [30, 40], [50, 60]]
+

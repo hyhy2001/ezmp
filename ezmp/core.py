@@ -3,6 +3,20 @@ from typing import Callable, Iterable, List, Any, Optional
 import multiprocessing
 
 from .utils import log_error # type: ignore
+import threading
+
+def _is_in_worker(use_threads: bool) -> bool:
+    """Detect if the current execution is inside an existing Pool worker."""
+    if threading.current_thread().name.startswith('ThreadPoolExecutor'):
+        return True
+        
+    if multiprocessing.current_process().daemon:
+        return True
+        
+    if not use_threads and multiprocessing.current_process().name != 'MainProcess':
+        return True
+        
+    return False
 
 def run(
     target_func: Callable, 
@@ -27,6 +41,22 @@ def run(
         processing, an ErrorResult is returned in its place rather than crashing.
     """
     
+    if _is_in_worker(use_threads):
+        from .utils import logger # type: ignore
+        logger.warning(
+            f"Nested ezmp execution detected (use_threads={use_threads}). "
+            f"Falling back to sequential execution to prevent thread/process exhaustion."
+        )
+        sequential_results = []
+        for item in items:
+            try:
+                res = target_func(item)
+                sequential_results.append(res)
+            except Exception as exc:
+                err_res = log_error(item, exc)
+                sequential_results.append(err_res)
+        return sequential_results
+        
     # Calculate sensible defaults for workers
     if max_workers is None:
         if use_threads:
@@ -71,6 +101,23 @@ def run_ordered(
     Like `run()`, but guarantees the returning list is in the exact same 
     order as the input `items`.
     """
+    if _is_in_worker(use_threads):
+        from .utils import logger # type: ignore
+        logger.warning(
+            f"Nested ezmp execution detected (use_threads={use_threads}). "
+            f"Falling back to sequential execution to prevent thread/process exhaustion."
+        )
+        items_list = list(items)
+        sequential_results = [None] * len(items_list)
+        for idx, item in enumerate(items_list):
+            try:
+                res = target_func(item)
+                sequential_results[idx] = res # type: ignore
+            except Exception as exc:
+                err_res = log_error(item, exc)
+                sequential_results[idx] = err_res # type: ignore
+        return sequential_results # type: ignore
+
     # Convert to list to ensure we can index it and know its length
     items_list = list(items)
     total_items = len(items_list)

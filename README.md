@@ -116,6 +116,28 @@ for processed_chunk_df in generator:
     print(processed_chunk_df['ezmp_result'])
 ```
 
+### 5. Nested Execution (Auto-Fallback)
+Running multiprocessing pools inside other multiprocessing pools causes severe bugs (like `daemonic processes are not allowed to have children` or thread pool deadlocks). `ezmp` detects these nested calls automatically and gracefully downshifts the inner function to sequential execution, shielding you from crashes.
+
+```python
+import ezmp
+import time
+
+def process_file(x):
+    time.sleep(0.1)
+    return x * 10
+
+def process_folder(folder_contents):
+    # This nested call is perfectly safe. 
+    # ezmp automatically falls back to sequential execution.
+    return ezmp.run(process_file, folder_contents)
+
+folders = [[1, 2], [3, 4], [5, 6]]
+
+# Only the outer layer spins up a multiprocessing pool
+ezmp.run(process_folder, folders)
+```
+
 ---
 
 ## 🛠️ API Reference
